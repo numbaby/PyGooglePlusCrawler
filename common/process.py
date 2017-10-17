@@ -5,11 +5,12 @@ email: hikaru870806@hotmail.com
 如有问题或建议请联系
 """
 from multiprocessing.connection import Client, Listener
+import sys
 import threading
 
 
 PROCESS_SERVER_IP = "localhost"  # 监听服务器IP
-PROCESS_SERVER_PORT = 54321  # 监听服务器端口
+PROCESS_SERVER_PORT = 12345  # 监听服务器端口
 PROCESS_STATUS = 0  # 服务器当前状态
 PROCESS_STATUS_RUN = 0  # 进程运行中
 PROCESS_STATUS_PAUSE = 1  # 进程暂停，知道状态变为0时才继续下载
@@ -43,7 +44,6 @@ class ProcessControl(threading.Thread):
 
 # 设置进程状态
 def set_process_status(process_status):
-    process_status = int(process_status)
     try:
         process_status = int(process_status)
     except ValueError:
@@ -52,3 +52,28 @@ def set_process_status(process_status):
         process_status = PROCESS_STATUS_RUN
     conn = Client((PROCESS_SERVER_IP, PROCESS_SERVER_PORT))
     conn.send(process_status)
+
+
+def pause_process():
+    _print_msg("pause process")
+    set_process_status(PROCESS_STATUS_PAUSE)
+
+
+def continue_process():
+    _print_msg("continue process")
+    set_process_status(PROCESS_STATUS_RUN)
+
+
+def stop_process():
+    _print_msg("stop process")
+    set_process_status(PROCESS_STATUS_STOP)
+
+
+# 控制台输出
+def _print_msg(msg):
+    # 终端输出编码
+    output_encoding = sys.stdout.encoding
+    if output_encoding == "UTF-8":
+        print msg
+    else:
+        print msg.decode("UTF-8").encode(output_encoding)

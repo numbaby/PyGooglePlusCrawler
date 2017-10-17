@@ -1,28 +1,35 @@
 # -*- coding:UTF-8  -*-
 """
+爬虫父类
 @author: hikaru
 email: hikaru870806@hotmail.com
 如有问题或建议请联系
 """
-from common import log, process, tool
+from common import keyboardEvent, log, net, process, tool
 import codecs
 import ConfigParser
 import os
+import re
 import sys
 import threading
 import time
 
 IS_INIT = False
 # 程序是否支持下载图片功能（会判断配置中是否需要下载图片，如全部是则创建图片下载目录）
-SYS_DOWNLOAD_IMAGE = 'download_image'
+SYS_DOWNLOAD_IMAGE = "download_image"
 # 程序是否支持下载视频功能（会判断配置中是否需要下载视频，如全部是则创建视频下载目录）
-SYS_DOWNLOAD_VIDEO = 'download_video'
+SYS_DOWNLOAD_VIDEO = "download_video"
 # 程序是否默认需要设置代理
-SYS_SET_PROXY = 'set_proxy'
+SYS_SET_PROXY = "set_proxy"
 # 程序是否支持不需要存档文件就可以开始运行
-SYS_NOT_CHECK_SAVE_DATA = 'no_save_data'
-# 程序是否需要开启cookie, value不为为空()时，从浏览器中加载相关域名的cookies，否则仅仅添加一个空的cookie对象
-SYS_SET_COOKIE = 'set_cookie'
+SYS_NOT_CHECK_SAVE_DATA = "no_save_data"
+# 程序是否需要从浏览器存储的cookie中获取指定cookie的值
+SYS_GET_COOKIE = "get_cookie"
+# 程序是否需要额外读取配置（应用级别）
+# 传入参数类型为tuple，且长度至少为二
+# 第一位是配置文件所在路径
+# 第二位开始是配置规则，类型为tuple，每个配置规则长度为3，顺序为(配置名字，默认值，配置读取方式)，同get_config方法后三个参数
+SYS_APP_CONFIG = "app_config"
 
 
 class Robot(object):
@@ -48,27 +55,35 @@ class Robot(object):
         sys_download_image = SYS_DOWNLOAD_IMAGE in sys_config
         sys_download_video = SYS_DOWNLOAD_VIDEO in sys_config
         sys_set_proxy = SYS_SET_PROXY in sys_config
-        sys_set_cookie = SYS_SET_COOKIE in sys_config
+        sys_get_cookie = SYS_GET_COOKIE in sys_config
         sys_not_check_save_data = SYS_NOT_CHECK_SAVE_DATA in sys_config
 
         # exe程序
         if tool.IS_EXECUTABLE:
             application_path = os.path.dirname(sys.executable)
             os.chdir(application_path)
-            config_path = os.path.join(os.getcwd(), "data\\config.ini")
+            config_path = os.path.join(os.getcwd(), "data/config.ini")
         else:
-            config_path = os.path.join(os.getcwd(), "..\\common\\config.ini")
+            config_path = tool.PROJECT_CONFIG_PATH
 
+        # 程序配置
         config = read_config(config_path)
-
         if not isinstance(extra_config, dict):
             extra_config = {}
+
+        # 应用配置
+        self.app_config = {}
+        if SYS_APP_CONFIG in sys_config and len(sys_config[SYS_APP_CONFIG]) >= 2:
+            app_config = read_config(sys_config[SYS_APP_CONFIG][0])
+            for app_config_template in  sys_config[SYS_APP_CONFIG][1:]:
+                if len(app_config_template) == 3:
+                    self.app_config[app_config_template[0]] = get_config(app_config, app_config_template[0], app_config_template[1], app_config_template[2])
 
         # 日志
         self.is_show_error = get_config(config, "IS_SHOW_ERROR", True, 2)
         self.is_show_step = get_config(config, "IS_SHOW_STEP", True, 2)
         self.is_show_trace = get_config(config, "IS_SHOW_TRACE", False, 2)
-        error_log_path = get_config(config, "ERROR_LOG_PATH", "log/errorLog.txt", 3)
+        error_log_path = get_config(config, "ERROR_LOG_PATH", "\\log/errorLog.txt", 3)
         self.error_log_path = replace_path(error_log_path)
         error_log_dir = os.path.dirname(self.error_log_path)
 
@@ -80,7 +95,7 @@ class Robot(object):
         if not is_log_step:
             self.step_log_path = ""
         else:
-            step_log_path = get_config(config, "STEP_LOG_PATH", "log/stepLog.txt", 3)
+            step_log_path = get_config(config, "STEP_LOG_PATH", "\\log/stepLog.txt", 3)
             self.step_log_path = replace_path(step_log_path)
             # 日志文件保存目录
             step_log_dir = os.path.dirname(self.step_log_path)
@@ -92,7 +107,7 @@ class Robot(object):
         if not is_log_trace:
             self.trace_log_path = ""
         else:
-            trace_log_path = get_config(config, "TRACE_LOG_PATH", "log/traceLog.txt", 3)
+            trace_log_path = get_config(config, "TRACE_LOG_PATH", "\\log/traceLog.txt", 3)
             self.trace_log_path = replace_path(trace_log_path)
             # 日志文件保存目录
             trace_log_dir = os.path.dirname(self.trace_log_path)
@@ -115,21 +130,16 @@ class Robot(object):
         self.is_download_video = get_config(config, "IS_DOWNLOAD_VIDEO", True, 2) and sys_download_video
 
         if not self.is_download_image and not self.is_download_video:
-            # 下载图片和视频都没有开启，请检查配置
-            if not self.is_download_image and sys_download_image and not self.is_download_video and sys_download_video:
-                self.print_msg("下载图片和视频都没有开启，请检查配置！")
-            elif not self.is_download_image and sys_download_image:
-                self.print_msg("下载图片没有开启，请检查配置！")
-            elif not self.is_download_video and sys_download_video:
-                self.print_msg("下载视频没有开启，请检查配置！")
-            tool.process_exit()
-            return
+            if sys_download_image or sys_download_video:
+                self.print_msg("所有支持的下载都没有开启，请检查配置！")
+                tool.process_exit()
+                return
 
         # 存档
         if "save_data_path" in extra_config:
-            self.save_data_path = extra_config["save_data_path"]
+            self.save_data_path = os.path.realpath(extra_config["save_data_path"])
         else:
-            self.save_data_path = get_config(config, "SAVE_DATA_PATH", "info/save.data", 3)
+            self.save_data_path = get_config(config, "SAVE_DATA_PATH", "\\\\info/save.data", 3)
         if not sys_not_check_save_data and not os.path.exists(self.save_data_path):
             # 存档文件不存在
             self.print_msg("存档文件%s不存在！" % self.save_data_path)
@@ -140,76 +150,72 @@ class Robot(object):
         if self.is_download_image:
             # 图片保存目录
             if "image_download_path" in extra_config:
-                self.image_download_path = extra_config["image_download_path"]
+                self.image_download_path = os.path.realpath(extra_config["image_download_path"])
             else:
-                self.image_download_path = get_config(config, "IMAGE_DOWNLOAD_PATH", "photo", 3)
+                self.image_download_path = get_config(config, "IMAGE_DOWNLOAD_PATH", "\\\\photo", 3)
             if not tool.make_dir(self.image_download_path, 0):
                 # 图片保存目录创建失败
                 self.print_msg("图片保存目录%s创建失败！" % self.image_download_path)
                 tool.process_exit()
                 return
-            # 图片临时下载目录
-            if "image_temp_path" in extra_config:
-                self.image_temp_path = extra_config["image_temp_path"]
-            else:
-                self.image_temp_path = get_config(config, "IMAGE_TEMP_PATH", "tempImage", 3)
-            # 图片下载数量，0为下载全部可用资源
-            self.get_image_count = get_config(config, "GET_IMAGE_COUNT", 0, 1)
         else:
             self.image_download_path = ""
-            self.image_temp_path = ""
-            self.get_image_count = 0
         # 是否需要下载视频
         if self.is_download_video:
             # 视频保存目录
             if "video_download_path" in extra_config:
-                self.video_download_path = extra_config["video_download_path"]
+                self.video_download_path = os.path.realpath(extra_config["video_download_path"])
             else:
-                self.video_download_path = get_config(config, "VIDEO_DOWNLOAD_PATH", "video", 3)
+                self.video_download_path = get_config(config, "VIDEO_DOWNLOAD_PATH", "\\\\video", 3)
             if not tool.make_dir(self.video_download_path, 0):
                 # 视频保存目录创建失败
                 self.print_msg("视频保存目录%s创建失败！" % self.video_download_path)
                 tool.process_exit()
                 return
-            # 视频下载临时目录
-            if "video_temp_path" in extra_config:
-                self.video_temp_path = extra_config["video_temp_path"]
-            else:
-                self.video_temp_path = get_config(config, "VIDEO_TEMP_PATH", "tempVideo", 3)
-            # 视频下载数量，0为下载全部可用资源
-            self.get_video_count = get_config(config, "GET_VIDEO_COUNT", 0, 1)
         else:
             self.video_download_path = ""
-            self.video_temp_path = ""
-            self.get_video_count = 0
-        # 是否需要重新排序图片
-        self.is_sort = get_config(config, "IS_SORT", True, 2)
-        self.get_page_count = get_config(config, "GET_PAGE_COUNT", 0, 1)
 
         # 代理
         is_proxy = get_config(config, "IS_PROXY", 2, 1)
         if is_proxy == 1 or (is_proxy == 2 and sys_set_proxy):
             proxy_ip = get_config(config, "PROXY_IP", "127.0.0.1", 0)
             proxy_port = get_config(config, "PROXY_PORT", "8087", 0)
-            tool.set_proxy(proxy_ip, proxy_port)
+            # 使用代理的线程池
+            net.set_proxy(proxy_ip, proxy_port)
+        else:
+            # 初始化urllib3的线程池
+            net.init_http_connection_pool()
 
         # cookies
-        if sys_set_cookie:
-            if sys_config[SYS_SET_COOKIE]:  # 加载浏览器cookie
-                # 操作系统&浏览器
-                browser_version = get_config(config, "BROWSER_VERSION", 2, 1)
-                # cookie
-                is_auto_get_cookie = get_config(config, "IS_AUTO_GET_COOKIE", True, 2)
-                if is_auto_get_cookie:
-                    cookie_path = tool.get_default_browser_cookie_path(browser_version)
+        self.cookie_value = {}
+        if sys_get_cookie:
+            # 操作系统&浏览器
+            browser_type = get_config(config, "BROWSER_TYPE", 2, 1)
+            # cookie
+            is_auto_get_cookie = get_config(config, "IS_AUTO_GET_COOKIE", True, 2)
+            if is_auto_get_cookie:
+                cookie_path = tool.get_default_browser_cookie_path(browser_type)
+            else:
+                cookie_path = get_config(config, "COOKIE_PATH", "", 0)
+            all_cookie_from_browser = tool.get_all_cookie_from_browser(browser_type, cookie_path)
+            for cookie_domain in sys_config[SYS_GET_COOKIE]:
+                # 如果指定了cookie key
+                if sys_config[SYS_GET_COOKIE][cookie_domain]:
+                    for cookie_key in sys_config[SYS_GET_COOKIE][cookie_domain]:
+                        self.cookie_value[cookie_key] = ""
+                    if cookie_domain in all_cookie_from_browser:
+                        for cookie_name in self.cookie_value:
+                            if cookie_name in all_cookie_from_browser[cookie_domain]:
+                                self.cookie_value[cookie_name] = all_cookie_from_browser[cookie_domain][cookie_name]
+                # 没有指定cookie key那么就是取全部
                 else:
-                    cookie_path = get_config(config, "COOKIE_PATH", "", 0)
-                if not tool.set_cookie_from_browser(cookie_path, browser_version, sys_config[SYS_SET_COOKIE]):
-                    self.print_msg("导入浏览器cookies失败")
-                    tool.process_exit()
-                    return
-            else:  # 使用空cookie
-                tool.set_empty_cookie()
+                    if cookie_domain in all_cookie_from_browser:
+                        for cookie_name in all_cookie_from_browser[cookie_domain]:
+                            self.cookie_value[cookie_name] = all_cookie_from_browser[cookie_domain][cookie_name]
+
+        # Http Setting
+        net.HTTP_CONNECTION_TIMEOUT = get_config(config, "HTTP_CONNECTION_TIMEOUT", 10, 1)
+        net.HTTP_REQUEST_RETRY_COUNT = get_config(config, "HTTP_REQUEST_RETRY_COUNT", 10, 1)
 
         # 线程数
         self.thread_count = get_config(config, "THREAD_COUNT", 10, 1)
@@ -220,32 +226,38 @@ class Robot(object):
         process_control_thread.setDaemon(True)
         process_control_thread.start()
 
+        # 键盘监控线程
+        if get_config(config, "IS_KEYBOARD_EVENT", True, 2):
+            keyboard_event_bind = {}
+            pause_process_key = get_config(config, "PAUSE_PROCESS_KEYBOARD_KEY", "F9", 0)
+            # 暂停进程
+            if pause_process_key:
+                keyboard_event_bind[pause_process_key] = process.pause_process
+            # 继续进程
+            continue_process_key = get_config(config, "CONTINUE_PROCESS_KEYBOARD_KEY", "F10", 0)
+            if continue_process_key:
+                keyboard_event_bind[continue_process_key] = process.continue_process
+            # 结束进程（取消当前的线程，完成任务）
+            stop_process_key = get_config(config, "STOP_PROCESS_KEYBOARD_KEY", "CTRL + F12", 0)
+            if stop_process_key:
+                keyboard_event_bind[stop_process_key] = process.stop_process
+
+            if keyboard_event_bind:
+                keyboard_control_thread = keyboardEvent.KeyboardEvent(keyboard_event_bind)
+                keyboard_control_thread.setDaemon(True)
+                keyboard_control_thread.start()
+
         self.print_msg("初始化完成")
 
     # 获取程序已运行时间（seconds）
     def get_run_time(self):
         return int(time.time() - self.start_time)
 
-    # 下载逻辑完成后手动调用，进行一些收尾工作
-    def finish_task(self):
-        if self.image_temp_path:
-            tool.delete_null_dir(self.image_temp_path)
-            if len(tool.get_dir_files_name(self.image_temp_path)) == 0:
-                tool.remove_dir(self.image_temp_path)
-            else:
-                self.print_msg("图片临时下载目录%s中存在文件" % self.image_temp_path)
-        if self.video_temp_path:
-            tool.delete_null_dir(self.video_temp_path)
-            if len(tool.get_dir_files_name(self.video_temp_path)) == 0:
-                tool.remove_dir(self.video_temp_path)
-            else:
-                self.print_msg("视频临时下载目录%s中存在文件" % self.video_temp_path)
-
 
 # 读取配置文件
 def read_config(config_path):
     config = ConfigParser.SafeConfigParser()
-    with codecs.open(config_path, encoding="utf-8-sig") as file_handle:
+    with codecs.open(tool.change_path_encoding(config_path), encoding="UTF-8-SIG") as file_handle:
         config.readfp(file_handle)
     return config
 
@@ -258,7 +270,7 @@ def read_config(config_path):
 # mode=3 : 文件路径，以"\"开头的为当前目录下创建
 def get_config(config, key, default_value, mode):
     if config.has_option("setting", key):
-        value = config.get("setting", key).encode("utf-8")
+        value = config.get("setting", key).encode("UTF-8")
     else:
         tool.print_msg("配置文件config.ini中没有找到key为'" + key + "'的参数，使用程序默认设置")
         value = default_value
@@ -278,13 +290,15 @@ def get_config(config, key, default_value, mode):
         else:
             value = True
     elif mode == 3:
-        if value[0] == "\\":
-            value = os.path.join(os.path.abspath(""), value[1:])  # 第一个 \ 仅做标记使用，实际需要去除
+        if value[:2] == "\\\\":  # \\ 开头，程序所在目录
+            value = os.path.join(os.path.abspath(""), value[2:])  # \\ 仅做标记使用，实际需要去除
+        elif value[0] == "\\":   # \ 开头，项目根目录（common目录上级）
+            value = os.path.join(tool.PROJECT_ROOT_PATH, value[1:])  # \ 仅做标记使用，实际需要去除
         value = os.path.realpath(value)
     return value
 
 
-# 将制定文件夹内的所有文件排序重命名并复制到其他文件夹中
+# 将指定文件夹内的所有文件排序重命名并复制到其他文件夹中
 def sort_file(source_path, destination_path, start_count, file_name_length):
     file_list = tool.get_dir_files_name(source_path, "desc")
     # 判断排序目标文件夹是否存在
@@ -298,7 +312,7 @@ def sort_file(source_path, destination_path, start_count, file_name_length):
             new_file_name = str(("%0" + str(file_name_length) + "d") % start_count) + file_type
             tool.copy_files(os.path.join(source_path, file_name), os.path.join(destination_path, new_file_name))
         # 删除临时文件夹
-        tool.remove_dir(source_path)
+        tool.remove_dir_or_file(source_path)
     return True
 
 
@@ -306,28 +320,26 @@ def sort_file(source_path, destination_path, start_count, file_name_length):
 # default_value_list 每一位的默认值
 def read_save_data(save_data_path, key_index, default_value_list):
     result_list = {}
-    if os.path.exists(save_data_path):
-        save_data_file = open(save_data_path, "r")
-        save_list = save_data_file.readlines()
-        save_data_file.close()
-        for single_save_data in save_list:
-            single_save_data = single_save_data.replace("\xef\xbb\xbf", "").replace("\n", "").replace("\r", "")
-            if len(single_save_data) == 0:
-                continue
-            single_save_list = single_save_data.split("\t")
+    if not os.path.exists(tool.change_path_encoding(save_data_path)):
+        return result_list
+    for single_save_data in tool.read_file(save_data_path, 2):
+        single_save_data = single_save_data.replace("\xef\xbb\xbf", "").replace("\n", "").replace("\r", "")
+        if len(single_save_data) == 0:
+            continue
+        single_save_list = single_save_data.split("\t")
 
-            # 根据default_value_list给没给字段默认值
-            index = 0
-            for default_value in default_value_list:
-                # _开头表示和该数组下标的值一直，如["", "_0"] 表示第1位为空时数值和第0位一致
-                if default_value != "" and default_value[0] == "_":
-                    default_value = single_save_list[int(default_value.replace("_", ""))]
-                if len(single_save_list) <= index:
-                    single_save_list.append(default_value)
-                if single_save_list[index] == "":
-                    single_save_list[index] = default_value
-                index += 1
-            result_list[single_save_list[key_index]] = single_save_list
+        # 根据default_value_list给没给字段默认值
+        index = 0
+        for default_value in default_value_list:
+            # _开头表示和该数组下标的值一直，如["", "_0"] 表示第1位为空时数值和第0位一致
+            if default_value != "" and default_value[0] == "_":
+                default_value = single_save_list[int(default_value.replace("_", ""))]
+            if len(single_save_list) <= index:
+                single_save_list.append(default_value)
+            if single_save_list[index] == "":
+                single_save_list[index] = default_value
+            index += 1
+        result_list[single_save_list[key_index]] = single_save_list
     return result_list
 
 
@@ -337,30 +349,13 @@ def rewrite_save_file(temp_save_data_path, save_data_path):
     account_list = read_save_data(temp_save_data_path, 0, [])
     temp_list = [account_list[key] for key in sorted(account_list.keys())]
     tool.write_file(tool.list_to_string(temp_list), save_data_path, 2)
-    os.remove(temp_save_data_path)
-
-
-# 对存档文件夹按照指定列重新排序
-def sort_save_data(save_data_path, sort_key_index=0):
-    save_data_file = open(save_data_path, "")
-    lines = save_data_file.readlines()
-    save_data_file.close()
-    line_list = {}
-    for line in lines:
-        line = line.replace("\xef\xbb\xbf", "").replace("\n", "").replace("\r", "")
-        temp_list = line.split("\t")
-        if len(temp_list) > 0:
-            line_list[temp_list[sort_key_index]] = temp_list
-
-    save_data_file = open(save_data_path, "w")
-    for sort_key in sorted(line_list.keys()):
-        save_data_file.write("\t".join(line_list[sort_key]) + "\n")
-    save_data_file.close()
+    tool.remove_dir_or_file(temp_save_data_path)
 
 
 # 生成新存档的文件路径
 def get_new_save_file_path(old_save_file_path):
-    return os.path.join(os.path.dirname(old_save_file_path), time.strftime("%m-%d_%H_%M_", time.localtime(time.time())) + os.path.basename(old_save_file_path))
+    file_name = time.strftime("%m-%d_%H_%M_", time.localtime(time.time())) + os.path.basename(old_save_file_path)
+    return os.path.join(os.path.dirname(old_save_file_path), file_name)
 
 
 # 替换目录中的指定字符串
@@ -380,6 +375,39 @@ def check_sub_key(needles, haystack):
     return False
 
 
+# 判断是不是整数
+def is_integer(number):
+    if isinstance(number, int):
+        return True
+    elif isinstance(number, long):
+        return True
+    elif str(number).isdigit():
+        return True
+    return False
+
+
+# 过滤文本中的字符，以符合windows支持的路径字符集
+def filter_text(text):
+    for filter_char in ["\\", "/", ":", "*", "?", '"', "<", ">", "|"]:
+        text = text.replace(filter_char, " ")  # 过滤一些windows文件名屏蔽的字符
+    while True:
+        new_text = text.strip().rstrip(".")  # 去除前后空格以及后缀的点
+        # 如果前后没有区别则直接返回
+        if text == new_text:
+            return text
+        else:
+            text = new_text
+
+
+# 替换文本中的表情符号
+def filter_emoji(text):
+    try:
+        emoji = re.compile(u'[\U00010000-\U0010ffff]')
+    except re.error:
+        emoji = re.compile(u'[\uD800-\uDBFF][\uDC00-\uDFFF]')
+    return emoji.sub('', text)
+
+
 # 进程是否需要结束
 # 返回码 0: 正常运行; 1 立刻结束; 2 等待现有任务完成后结束
 def is_process_end():
@@ -388,3 +416,52 @@ def is_process_end():
     elif process.PROCESS_STATUS == process.PROCESS_STATUS_FINISH:
         return 2
     return 0
+
+
+# 获取网络文件下载失败的原因
+def get_save_net_file_failed_reason(return_code):
+    if return_code == 404:
+        return "源文件已被删除"
+    elif return_code == 403:
+        return "源文件没有权限下载"
+    elif return_code == -1:
+        return "源文件地址格式不正确"
+    elif return_code == -2:
+        return "源文件多次获取失败，可能无法访问"
+    elif return_code == -3:
+        return "源文件多次下载后和原始文件大小不一致，可能网络环境较差"
+    elif return_code > 0:
+        return "未知错误，http code %s" % return_code
+    else:
+        return "未知错误，下载返回码 %s" % return_code
+
+
+# 获取网络文件下载失败的原因
+def get_http_request_failed_reason(return_code):
+    # return_code = response.status
+    if return_code == 404:
+        return "页面已被删除"
+    elif return_code == 403:
+        return "页面没有权限访问"
+    elif return_code == net.HTTP_RETURN_CODE_RETRY:
+        return "页面多次访问失败，可能无法访问"
+    elif return_code == net.HTTP_RETURN_CODE_URL_INVALID:
+        return "URL格式错误"
+    elif return_code == net.HTTP_RETURN_CODE_JSON_DECODE_ERROR:
+        return "返回信息不是一个有效的JSON格式"
+    elif return_code == net.HTTP_RETURN_CODE_DOMAIN_NOT_RESOLVED:
+        return "域名无法解析"
+    elif return_code > 0:
+        return "未知错误，http code %s" % return_code
+    else:
+        return "未知错误，return code %s" % return_code
+
+
+class RobotException(SystemExit):
+    def __init__(self, msg=""):
+        SystemExit.__init__(self, 1)
+        self.exception_message = msg
+
+    @property
+    def message(self):
+        return  self.exception_message
